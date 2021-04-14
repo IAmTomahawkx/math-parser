@@ -10,14 +10,15 @@ def __token_eq(self, other):
 
 Token.__eq__ = __token_eq
 
-
+# NoInspection PyUnresolvedReference
 class MathLexer(Lexer):
-    tokens = { FUNCTION, FUNCTION_CALL, NAME, NUMBER, NEWLINE }
+    tokens = { FUNCTION, PLOT_FUNCTION, FUNCTION_CALL, NAME, NUMBER, NEWLINE }
     ignore = ' \t'
     literals = { '=', '(', ')' }
 
     # Tokens
-    FUNCTION = r'([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*([a-zA-Z0-9^*/\-+\(\) \t]*)'
+    FUNCTION = r'([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)'
+    PLOT_FUNCTION = r'y\s*=\s*(.*)'
     FUNCTION_CALL = r'([a-zA-Z]+)\((.*)\)'
     NAME = r'[a-zA-Z_][a-zA-Z0-9_]*'
 
@@ -49,7 +50,7 @@ class ArgLexer(Lexer):
     #    self.source = source
     #    super(ArgLexer, self).__init__()
 
-    tokens = { FUNCTION, FUNCTION_CALL, NAME, NUMBER}
+    tokens = { FUNCTION, FUNCTION_CALL, NAME, NUMBER, NEWLINE}
     ignore = ' \t'
     literals = {'(', ')', ','}
 
@@ -76,9 +77,8 @@ class ArgLexer(Lexer):
             raise TokenizedUserInputError(self.text, t, f"Invalid number: '{t.value}'")
         return t
 
-    @_(r'\n+')
-    def newline(self, t):
-        self.lineno += t.value.count('\n')
+    @_(r',')
+    def NEWLINE(self, t):
         return t
 
     def error(self, t):

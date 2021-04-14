@@ -60,26 +60,27 @@ class EvaluationError(UserInputError):
 
     def make_traceback(self):
         inp = self.input
-        index = self.input.index(self.token)
-        close_tokens = [str(x.value) for x in inp[index-1:index+2]]
-        print(close_tokens)
+        try:
+            index = self.input.index(self.token)
+            close_tokens = [str(x.value) for x in inp[index-1:index+2]]
 
-        a = ""
-        if index - 2 < 0:
-            top = ""
-        else:
-            top = a = str(inp[index-2].value)
+            a = ""
+            if index - 2 < 0:
+                top = ""
+            else:
+                top = a = str(inp[index-2].value)
 
-        top += " >>" + " ".join(close_tokens) + "<< "
-        b = ""
-        if index + 2 < len(inp):
-            b = str(inp[index+3].value)
-            top += b
+            top += " >>" + " ".join(close_tokens) + "<< "
+            if index + 2 < len(inp):
+                b = str(inp[index+3].value)
+                top += b
 
-        lowtok_under = str(self.left) + (" "*(len(str(inp[index-1].value))-len(str(self.left))))
-        mid = f"{' '*len(a)}   {lowtok_under}   {self.right}"
-        formatted = f">{top}\n>{mid}\n{'~'*len(mid)}\n{self.message}"
-        return formatted
+            lowtok_under = str(self.left) + (" "*(len(str(inp[index-1].value))-len(str(self.left))))
+            mid = f"{' '*len(a)}   {lowtok_under}   {self.right}"
+            formatted = f">{top}\n>{mid}\n{'~'*len(mid)}\n{self.message}"
+            return formatted
+        except ValueError:
+            return f">[unable to locate traceback]\n>{self.left}\t\t{self.right}\n>~~~~~~~~~~~~~~~~~\n>{self.message}"
 
     def __str__(self):
         return self.make_traceback()

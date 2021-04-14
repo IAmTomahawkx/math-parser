@@ -6,7 +6,8 @@ from sly.lex import Token
 from .lex import ArgLexer
 from .errors import *
 
-FUNCTION_RE = re.compile(r"([a-zA-Z]*)\(([a-zA-Z,\s]*)\)\s*=\s*([a-zA-Z0-9^*/\-+() ]*)") # P(x) = expr
+FUNCTION_RE = re.compile(r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)") # P(x) = expr
+PLOT_FUNCTION_RE = re.compile(r"y\s*=\s*(.*)")
 FUNCTIONCALL_RE = re.compile(r"([a-zA-Z]*)\((.*)\)") # P(x[, y,...])
 
 MAX_ALLOWABLE_NUMBER = 99999999
@@ -73,8 +74,29 @@ class Parser:
 
                 self.state[f.name] = f
                 last_token = f
-                if tokens[index+1].value == "\n":
-                    skip += 1
+                try:
+                    if tokens[index+1].type == "NEWLINE":
+                        skip += 1
+                except IndexError:
+                    pass
+
+                continue
+
+            elif token.type == "PLOT_FUNCTION":
+                if not allow_functions:
+                    raise TokenizedUserInputError(self.input, token, "Functions are not allowed here")
+
+                groups = PLOT_FUNCTION_RE.match(token.value)
+                value = groups.groups()[0]
+                f = PlottableFunction("y", ["x"], self.traverse_tokens(list(self.lex.tokenize(value)), allow_functions=False)[0].chunks)
+
+                exprs.append(f)
+                last_token = f
+                try:
+                    if tokens[index+1].type == "NEWLINE":
+                        skip += 1
+                except IndexError:
+                    pass
 
                 continue
 
@@ -98,6 +120,8 @@ class Parser:
 
             elif token.type == "OPERATOR":
                 if not last_token and token.value != "-":
+                    raise TokenizedUserInputError(self.input, token, "Unexpected operator")
+                if last_token and last_token.type == "OPERATOR":
                     raise TokenizedUserInputError(self.input, token, "Unexpected operator")
 
                 if token.value == "-" and last_token and last_token.value == "-":
@@ -136,7 +160,7 @@ class Parser:
                 last_token = token
 
             if bracket:
-                bracket.tokens.append(token)
+                bracket.add_chunk(token)
             else:
                 exprs[-1].add_chunk(token)
 
@@ -150,14 +174,16 @@ class Parser:
                 except AttributeError:
                     pass
 
-        for expr in exprs:
+        for expr in exprs.copy():
             expr.validate(self)
+            if not expr.chunks:
+                exprs.remove(expr)
 
         return exprs
 
     def parse_args(self, _, __, args: str):
         tokens = list(ArgLexer().tokenize(args))
-        v = self.traverse_tokens(tokens, allow_functions=False)[0].chunks
+        v = self.traverse_tokens(tokens, allow_functions=False)
         args = [x for x in v if (isinstance(x, Token) and x.type != ",") or not isinstance(x, Token)]
         return args
 
@@ -188,7 +214,7 @@ class Parser:
             return self.get_var(v, namespace)
         elif isinstance(v, Token):
             return self.get_var_with_state(v, namespace)
-        elif isinstance(v, FunctionCall):
+        elif isinstance(v, (FunctionCall, Bracket)):
             return v.execute(self, namespace)
 
         raise RuntimeError(f"unable to determine types. {v!r}")
@@ -287,11 +313,15 @@ class Operator:
         if right > MAX_ALLOWABLE_NUMBER:
             raise EvaluationError(parser.tokens, self.token, left, right,
                                   "Number (right) is larger than the permissible values")
+        if self.op == "^" and right > 50:
+            raise EvaluationError(parser.tokens, self.token, left, right,
+                                  "Number (right) is larger than the permissible values")
         return self.OPS[self.op](left, right)
 
 class Expression:
     __slots__ = "chunks",
     value = None
+    plot = False
 
     def __init__(self):
         self.chunks = [] # type: List[Union[Bracket, Token, Operator, FunctionCall]]
@@ -322,16 +352,24 @@ class Expression:
         self.chunks.append(obj)
 
     def validate(self, parser: Parser):
-        if len(self.chunks) > 1:
-            t0 = self.chunks[0]
-            t1 = self.chunks[1]
+        def _t(t0, t1, x):
             if isinstance(t0, Operator) and t0.op == "-" and isinstance(t1, Token) and t1.type == "NUMBER":
                 t1.value *= -1
                 t1.index -= t1.index - t0.token.index
-                self.chunks[0] = t1
-                del self.chunks[1]
+                x[0] = t1
+                del x[1]
 
-    def execute(self, parser: Parser, namespace: dict=None):
+        if len(self.chunks) > 1:
+            t0_ = self.chunks[0]
+            t1_ = self.chunks[1]
+            _t(t0_, t1_, self.chunks)
+
+        if self.chunks and isinstance(self.chunks[0], Bracket) and len(self.chunks[0].tokens)>1:
+            t0_ = self.chunks[0].tokens[0]
+            t1_ = self.chunks[0].tokens[1]
+            _t(t0_, t1_, self.chunks[0].tokens)
+
+    def execute(self, _: Token, parser: Parser, namespace: dict=None):
         return parser.do_math(self.chunks, namespace)
 
     def __repr__(self):
@@ -344,6 +382,31 @@ class Bracket:
     def __init__(self, start: Token):
         self.tokens = []
         self.start = start
+
+    def add_chunk(self, obj: Union["Bracket", Token, Operator, "FunctionCall"]):
+        if self.tokens:
+            if isinstance(obj, Token) and obj.type in ("NUMBER", "NAME"):
+                t = Token()
+                t.value = "*"
+                t.index = obj.index
+                t.lineno = obj.lineno
+                t.type = "OPERATOR"
+                if isinstance(self.tokens[-1], Token) and self.tokens[-1].type in ("NUMBER", "NAME"):
+                    self.tokens.append(Operator(t))
+
+                elif isinstance(self.tokens[-1], Bracket):
+                    self.tokens.append(Operator(t))
+
+            elif isinstance(obj, Bracket):
+                if isinstance(self.tokens[-1], Token) and self.tokens[-1].type in ("NUMBER", "NAME"):
+                    t = Token()
+                    t.value = "*"
+                    t.index = obj.start.index
+                    t.lineno = obj.start.lineno
+                    t.type = "OPERATOR"
+                    self.tokens.append(Operator(t))
+
+        self.tokens.append(obj)
 
     def execute(self, parser: Parser, namespace: dict=None):
         expr = parser.traverse_tokens(self.tokens, allow_functions=False)
@@ -360,6 +423,7 @@ class Bracket:
 class Function:
     __slots__ = "name", "args", "chunks"
     value = None
+    plot = False
 
     def __init__(self, name: str, args: List[str], chunks: List[Union[Bracket, Token, Operator]]):
         self.name = name
@@ -380,11 +444,34 @@ class Function:
         for chunk in self.chunks:
             validate_chunk(chunk)
 
-    def execute(self, _: Token, parser: Parser, scope: dict):
+    def plots(self, parser: Parser):
+        """
+        Returns a dict of x:y coordinates
+        """
+        scope = {"x": 0}
+        plots = {}
+
+        for x in range(-5, 6):
+            scope['x'] = x
+            try:
+                y = parser.do_math(self.chunks, scope)
+            except (ZeroDivisionError):
+                y = None
+            plots[x] = y
+
+        return plots
+
+    def execute(self, _: Token, parser: Parser, scope: dict=None):
         return parser.do_math(self.chunks, scope)
 
     def __repr__(self):
         return f"<Function name={self.name} args={self.args} chunks={self.chunks}"
+
+class PlottableFunction(Function):
+    plot = True
+
+    def execute(self, _: Token, parser: Parser, scope: dict=None):
+        return self.plots(parser)
 
 class BuiltinFunction(Function):
     def __init__(self, name: str, args: List[str], callback: Callable): # noqa
@@ -395,7 +482,7 @@ class BuiltinFunction(Function):
     def validate(self, parser: Parser):
         pass
 
-    def execute(self, token: Token, parser: Parser, scope: dict):
+    def execute(self, token: Token, parser: Parser, scope: dict=None):
         try:
             return self.chunks(parser, **scope)
         except ZeroDivisionError:
