@@ -153,8 +153,9 @@ class Parser:
                 functioncalls.append(f)
                 continue
 
-            elif token.value == "\n":
+            elif token.type == "NEWLINE":
                 exprs.append(Expression())
+                continue
 
             else:
                 last_token = token
@@ -213,6 +214,9 @@ class Parser:
         elif isinstance(v, str):
             return self.get_var(v, namespace)
         elif isinstance(v, Token):
+            if v.type == "NUMBER":
+                return v.value
+
             return self.get_var_with_state(v, namespace)
         elif isinstance(v, (FunctionCall, Bracket)):
             return v.execute(self, namespace)
