@@ -1,6 +1,7 @@
 import re
 import math
 import copy
+import logging
 from typing import List, Union, Callable
 from sly.lex import Token
 from .lex import ArgLexer
@@ -11,6 +12,8 @@ PLOT_FUNCTION_RE = re.compile(r"y\s*=\s*(.*)")
 FUNCTIONCALL_RE = re.compile(r"([a-zA-Z]*)\((.*)\)") # P(x[, y,...])
 
 MAX_ALLOWABLE_NUMBER = 99999999
+
+logger = logging.getLogger("mathparser")
 
 class Builtins:
     def __init__(self):
@@ -224,10 +227,10 @@ class Parser:
         raise RuntimeError(f"unable to determine types. {v!r}")
 
     def do_math(self, seq: List[Union["Bracket", Token, "Operator", "FunctionCall"]], namespace: dict):
-        print("----START-----")
-        print(namespace, seq)
+        logger.debug("----START-----")
+        logger.debug(namespace, seq)
         if len(seq) < 3:
-            print("----QUICKCALL-END----")
+            logger.debug("----QUICKCALL-END----")
             return self._quick_call(seq, namespace)
 
         ops = _ops = []
@@ -243,7 +246,7 @@ class Parser:
                 ops.append(i)
 
         # loop through for each operator to apply bedmas
-        print(ops)
+        logger.debug(ops)
         for operator in ("^", "/", "*", "+", "-"):
             it = iter(enumerate(ops))
             new = []
@@ -253,7 +256,7 @@ class Parser:
                         op = left
                         left = new.pop()
                     else:
-                        print(i, left, new, ops, _ops)
+                        logger.debug(i, left, new, ops, _ops)
                         new.append(left)
                         continue
                 else:
@@ -279,17 +282,17 @@ class Parser:
                 if isinstance(left, str): #variable
                     left = self.get_var(left, namespace)
 
-                print(left, right)
+                logger.debug(left, right)
                 value = op.execute(self, left, right)
                 new.append(value)
 
-            print(new, ops)
+            logger.debug(new, ops)
             ops = new
             if len(ops) == 1:
                 break
 
-        print(ops)
-        print("----END----")
+        logger.debug(ops)
+        logger.debug("----END----")
         return ops[0]
 
 
@@ -418,7 +421,6 @@ class Bracket:
             raise TokenizedUserInputError(parser.input, self.start, "Invalid Syntax (multi-expr)")
         expr = expr[0]
 
-        print(expr.chunks)
         return parser.do_math(expr.chunks, namespace)
 
     def __repr__(self):
@@ -510,8 +512,9 @@ class FunctionCall:
             raise TokenizedUserInputError(parser.input, self._start, f"Function '{self.name}' not found")
 
         func = parser.state[self.name]
-        print(self.args, func.args)
+
         if len(func.args) != len(self.args):
+            logger.debug(str((self.args, func.args)))
             raise TokenizedUserInputError(
                 parser.input,
                 self._start,
