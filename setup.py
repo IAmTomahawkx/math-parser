@@ -4,8 +4,7 @@ from setuptools import setup
 with open("readme.md") as f:
     readme = f.read()
 
-with open('requirements.txt') as f:
-  requirements = f.read().splitlines()
+requirements = ['sly', 'matplotlib']
 
 with open('mathparser/__init__.py') as f:
     version = re.search(r'^__version__\s*=\s*[\'"]([^\'"]*)[\'"]', f.read(), re.MULTILINE).group(1)
