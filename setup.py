@@ -9,7 +9,7 @@ requirements = ['sly', 'matplotlib']
 with open('mathparser/__init__.py') as f:
     version = re.search(r'^__version__\s*=\s*[\'"]([^\'"]*)[\'"]', f.read(), re.MULTILINE).group(1)
 
-setup(name='discord.py',
+setup(name='mathparser',
       author='IAmTomahawkx',
       url='https://github.com/IAmTomahawkx/math-parser',
       project_urls={
