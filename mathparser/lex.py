@@ -1,4 +1,4 @@
-import sly.lex
+import re
 from sly.lex import Lexer, Token
 
 from .errors import UserInputError, TokenizedUserInputError
@@ -12,21 +12,22 @@ Token.__eq__ = __token_eq
 
 # NoInspection PyUnresolvedReference
 class MathLexer(Lexer):
-    tokens = { FUNCTION, PLOT_FUNCTION, FUNCTION_CALL, NAME, NUMBER, NEWLINE }
-    ignore = ' \t'
-    literals = { '=', '(', ')' }
+    tokens = { FUNCTION, PLOT_FUNCTION, SEQUENCE, FUNCTION_CALL, NAME, NUMBER, NEWLINE }
+    ignore = " \t"
+    literals = { "=", "(", ")" }
 
     # Tokens
-    FUNCTION = r'([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)'
-    PLOT_FUNCTION = r'y\s*=\s*(.*)'
-    FUNCTION_CALL = r'([a-zA-Z]+)\((.*)\)'
-    NAME = r'[a-zA-Z_][a-zA-Z0-9_]*'
+    FUNCTION = r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)"
+    PLOT_FUNCTION = r"y\s*=\s*(.*)"
+    SEQUENCE = r"[sS]\s*=\s*([^,\n]*),([^,\n]*),?([^,\n]*)?"
+    FUNCTION_CALL = r"([a-zA-Z]+)\((.*)\)"
+    NAME = r"[a-zA-Z_][a-zA-Z0-9_]*"
 
-    @_(r'[+\-*/^]')
+    @_(r"[+\-*/^]")
     def OPERATOR(self, t: Token):
         return t
 
-    @_(r'(\d|\.)+')
+    @_(r"(\d|\.)+")
     def NUMBER(self, t: Token):
         if len(t.value) > 8:
             raise TokenizedUserInputError(self.text, t, "Number is too large or too precise")
@@ -37,9 +38,9 @@ class MathLexer(Lexer):
             raise TokenizedUserInputError(self.text, t, f"Invalid number: '{t.value}'")
         return t
 
-    @_(r'\n+')
+    @_(r"\n+")
     def NEWLINE(self, t):
-        self.lineno += t.value.count('\n')
+        self.lineno += t.value.count("\n")
         return t
 
     def error(self, t):
@@ -51,22 +52,26 @@ class ArgLexer(Lexer):
     #    super(ArgLexer, self).__init__()
 
     tokens = { FUNCTION, FUNCTION_CALL, NAME, NUMBER, NEWLINE}
-    ignore = ' \t'
-    literals = {'(', ')', ','}
+    ignore = " \t"
+    literals = {"(", ")", ","}
+
+    @_(r"S\s*=\s*([^,]*),([^,]*),?([^,]*)?")
+    def SEQUENCE(self, t: Token):
+        raise TokenizedUserInputError(self.text, t, "Sequences are not allowed here")
 
     @_(r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*([a-zA-Z0-9^*/\-+\(\) \t]*)")
     def FUNCTION(self, t: Token):
         raise TokenizedUserInputError(self.text, t, "Functions are not allowed here")
 
     # Tokens
-    FUNCTION_CALL = r'([a-zA-Z]+)\((.*)\)'
-    NAME = r'[a-zA-Z_][a-zA-Z0-9_]*'
+    FUNCTION_CALL = r"([a-zA-Z]+)\((.*)\)"
+    NAME = r"[a-zA-Z_][a-zA-Z0-9_]*"
 
-    @_(r'[+\-*/^]')
+    @_(r"[+\-*/^]")
     def OPERATOR(self, t: Token):
         return t
 
-    @_(r'(\d|\.)+')
+    @_(r"(\d|\.)+")
     def NUMBER(self, t: Token):
         if len(t.value) > 8:
             raise TokenizedUserInputError(self.text, t, "Number is too large or too precise")
@@ -77,7 +82,7 @@ class ArgLexer(Lexer):
             raise TokenizedUserInputError(self.text, t, f"Invalid number: '{t.value}'")
         return t
 
-    @_(r',')
+    @_(r",")
     def NEWLINE(self, t):
         return t
 

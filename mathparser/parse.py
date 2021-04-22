@@ -2,13 +2,14 @@ import re
 import math
 import copy
 import logging
-from typing import List, Union, Callable
+from typing import List, Union, Callable, Any
 from sly.lex import Token
 from .lex import ArgLexer
 from .errors import *
 
 FUNCTION_RE = re.compile(r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)") # P(x) = expr
 PLOT_FUNCTION_RE = re.compile(r"y\s*=\s*(.*)")
+SEQUENCE_RE = re.compile(r"[sS]\s*=\s*([^,\n]*),([^,\n]*),?([^,\n]*)?")
 FUNCTIONCALL_RE = re.compile(r"([a-zA-Z]*)\((.*)\)") # P(x[, y,...])
 
 MAX_ALLOWABLE_NUMBER = 99999999
@@ -43,6 +44,7 @@ class Parser:
         self.lex = lex
         self.state = BUILTINS.builtins.copy()
         self.tokens = None # type: List[Token]
+        self.sequence = None
 
     def parse(self, tokens: List[Token]):
         self.tokens = tokens
@@ -63,7 +65,48 @@ class Parser:
                 skip -= 1
                 continue
 
-            if token.type == "FUNCTION":
+            if token.type in ("NUMBER", "NAME"):
+                last_token = token
+                if bracket:
+                    bracket.add_chunk(token)
+                else:
+                    exprs[-1].add_chunk(token)
+
+                continue
+
+            elif token.type == "OPERATOR":
+                if not last_token and token.value != "-":
+                    raise TokenizedUserInputError(self.input, token, "Unexpected operator")
+
+                if last_token and last_token.type == "OPERATOR":
+                    raise TokenizedUserInputError(self.input, token, "Unexpected operator")
+
+                if token.value == "-" and last_token and last_token.value == "-":
+                    _token = copy.copy(token)
+                    _token.value = "+"
+                    if bracket:
+                        bracket.tokens.pop()
+                        bracket.tokens.append(Operator(_token))
+                    else:
+                        exprs[-1].chunks.pop()
+                        exprs[-1].chunks.append(Operator(_token))
+
+                    last_token = token
+                    continue
+
+                elif last_token and last_token.value == token.value:
+                    raise TokenizedUserInputError(self.input, token, f"Unexpected '{token.value}'")
+
+                token = Operator(token)
+                last_token = token
+                if bracket:
+                    bracket.add_chunk(token)
+                else:
+                    exprs[-1].add_chunk(token)
+
+                continue
+
+            elif token.type == "FUNCTION":
                 if not allow_functions:
                     raise TokenizedUserInputError(self.input, token, "Functions are not allowed here")
 
@@ -85,22 +128,8 @@ class Parser:
 
                 continue
 
-            elif token.type == "PLOT_FUNCTION":
-                if not allow_functions:
-                    raise TokenizedUserInputError(self.input, token, "Functions are not allowed here")
-
-                groups = PLOT_FUNCTION_RE.match(token.value)
-                value = groups.groups()[0]
-                f = PlottableFunction("y", ["x"], self.traverse_tokens(list(self.lex.tokenize(value)), allow_functions=False)[0].chunks)
-
-                exprs.append(f)
-                last_token = f
-                try:
-                    if tokens[index+1].type == "NEWLINE":
-                        skip += 1
-                except IndexError:
-                    pass
-
+            elif token.type == "NEWLINE":
+                exprs.append(Expression())
                 continue
 
             elif token.type == "(":
@@ -121,31 +150,6 @@ class Parser:
                 if depth < 0:
                     raise TokenizedUserInputError(self.input, token, "Unexpected closing bracket")
 
-            elif token.type == "OPERATOR":
-                if not last_token and token.value != "-":
-                    raise TokenizedUserInputError(self.input, token, "Unexpected operator")
-                if last_token and last_token.type == "OPERATOR":
-                    raise TokenizedUserInputError(self.input, token, "Unexpected operator")
-
-                if token.value == "-" and last_token and last_token.value == "-":
-                    _token = copy.copy(token)
-                    _token.value = "+"
-                    if bracket:
-                        bracket.tokens.pop()
-                        bracket.tokens.append(Operator(_token))
-                    else:
-                        exprs[-1].chunks.pop()
-                        exprs[-1].chunks.append(Operator(_token))
-
-                    last_token = token
-                    continue
-
-                elif last_token and last_token.value == token.value:
-                    raise TokenizedUserInputError(self.input, token, f"Unexpected '{token.value}'")
-
-                last_token = token
-                token = Operator(token)
-
             elif token.type == "FUNCTION_CALL":
                 toks = FUNCTIONCALL_RE.match(token.value)
                 name, args = toks.groups()
@@ -156,12 +160,37 @@ class Parser:
                 functioncalls.append(f)
                 continue
 
-            elif token.type == "NEWLINE":
-                exprs.append(Expression())
+            elif token.type == "PLOT_FUNCTION":
+                if not allow_functions:
+                    raise TokenizedUserInputError(self.input, token, "Functions are not allowed here")
+
+                groups = PLOT_FUNCTION_RE.match(token.value)
+                value = groups.groups()[0]
+                f = PlottableFunction("y", ["x"], self.traverse_tokens(list(self.lex.tokenize(value)), allow_functions=False)[0].chunks)
+
+                exprs.append(f)
+                last_token = f
+                try:
+                    if tokens[index+1].type == "NEWLINE":
+                        skip += 1
+                except IndexError:
+                    pass
+
                 continue
 
-            else:
-                last_token = token
+            elif token.type == "SEQUENCE":
+                if not allow_functions:
+                    raise TokenizedUserInputError(self.input, token, "Sequences are not allowed here")
+
+                if "S" in self.state:
+                    raise TokenizedUserInputError(self.input, token, "A sequence has already been defined")
+
+                groups = SEQUENCE_RE.match(token.value)
+                attrs = list(groups.groups())
+                self.sequence = seq = Sequence(token, attrs)
+                fn = SequenceFunction(seq)
+                self.state['S'] = self.state['s'] = fn
+                continue
 
             if bracket:
                 bracket.add_chunk(token)
@@ -172,6 +201,9 @@ class Parser:
             call.validate(self)
 
         if allow_functions:
+            if self.sequence:
+                self.sequence.validate(self)
+
             for x in self.state.values():
                 try:
                     x.validate(self)
@@ -376,7 +408,7 @@ class Expression:
             t1_ = self.chunks[0].tokens[1]
             _t(t0_, t1_, self.chunks[0].tokens)
 
-    def execute(self, _: Token, parser: Parser, namespace: dict=None):
+    def execute(self, _: Any, parser: Parser, namespace: dict=None):
         return parser.do_math(self.chunks, namespace)
 
     def __repr__(self):
@@ -425,6 +457,46 @@ class Bracket:
 
     def __repr__(self):
         return f"<Bracket {self.tokens}>"
+
+class Sequence:
+    __slots__ = "values", "geometric", "t", "d", "token"
+    value = None
+
+    def __init__(self, token: Token, values: List[str]):
+        self.values = values
+        self.token = token
+        self.geometric: bool = None # noqa
+        self.t: float = None # noqa
+        self.d: float = None # noqa
+
+    def validate(self, parser: Parser):
+        if len(self.values) < 2:
+            raise TokenizedUserInputError(parser.input, self.token, f"Expected 2-3 sequence values, got {len(self.values)}")
+
+        arg1 = parser.parse_args(None, None, self.values[0])[0].execute(None, parser)
+        if int(arg1) == arg1:
+            arg1 = int(arg1)
+
+        arg2 = parser.parse_args(None, None, self.values[1])[0].execute(None, parser)
+        if int(arg2) == arg2:
+            arg2 = int(arg2)
+
+        arg3 = None
+
+        if self.values[2]:
+            arg3 = parser.parse_args(None, None, self.values[2])[0].execute(None, parser)
+            if int(arg3) == arg3:
+                arg3 = int(arg3)
+
+        self.t = arg1
+        self.d = arg2 / arg1
+
+        if arg3 and arg3 / arg2 != self.d:
+            raise TokenizedUserInputError(parser.input, self.token, f"Invalid sequence ({arg2}/{arg1} != {arg3}/{arg2})")
+
+    def execute(self, _: Token, __: Parser, value: Union[int, float]):
+        return self.t*(self.d**(value-1))
+
 
 class Function:
     __slots__ = "name", "args", "chunks"
@@ -478,6 +550,24 @@ class PlottableFunction(Function):
 
     def execute(self, _: Token, parser: Parser, scope: dict=None):
         return self.plots(parser)
+
+class SequenceFunction(Function):
+    __slots__ = "sequence",
+
+    def __init__(self, sequence: Sequence):
+        self.name = "S"
+        self.args = ["value"]
+        self.chunks = None
+        self.sequence = sequence
+
+    def validate(self, parser: Parser):
+        pass
+
+    def execute(self, token: Token, parser: Parser, scope: dict=None):
+        if not scope:
+            raise ValueError("shouldnt get here")
+
+        return self.sequence.execute(token, parser, scope['value'])
 
 class BuiltinFunction(Function):
     def __init__(self, name: str, args: List[str], callback: Callable): # noqa
