@@ -2,7 +2,7 @@ import re
 import math
 import copy
 import logging
-from typing import List, Union, Callable, Any
+from typing import List, Union, Callable, Any, Optional
 from sly.lex import Token
 from .lex import ArgLexer
 from .errors import *
@@ -10,9 +10,11 @@ from .errors import *
 FUNCTION_RE = re.compile(r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)") # P(x) = expr
 PLOT_FUNCTION_RE = re.compile(r"y\s*=\s*(.*)")
 SEQUENCE_RE = re.compile(r"[sS]\s*=\s*([^,\n]*),([^,\n]*),?([^,\n]*)?")
-FUNCTIONCALL_RE = re.compile(r"([a-zA-Z]*)\((.*)\)") # P(x[, y,...])
+FUNCTIONCALL_RE = re.compile(r"([a-zA-Z]+)\s*\((.*)\)") # P(x[, y,...])
+SEQUENCE_X_RE = re.compile(r"[sS]\s*[?!]!?\s*\((.*)\)") # s?|!|!!(400)
 
 MAX_ALLOWABLE_NUMBER = 99999999
+MAX_EXPONENT = 50
 
 logger = logging.getLogger("mathparser")
 
@@ -23,6 +25,7 @@ class Builtins:
         def _unwrap(func: Callable):
             def call(_, **kwargs):
                 return func(*kwargs.values())
+
             return call
         self.builtins = {
             "rad": BuiltinFunction("rad", _num, _unwrap(math.radians)),
@@ -32,7 +35,7 @@ class Builtins:
             "asin": BuiltinFunction("asin", _num2, _unwrap(lambda x, y: math.asin(x/y))),
             "acos": BuiltinFunction("acos", _num2, _unwrap(lambda x, y: math.acos(x/y))),
             "atan": BuiltinFunction("atan", _num2, _unwrap(lambda x, y: math.atan(x/y))),
-            "log": BuiltinFunction("log", _num2, _unwrap(math.log)),
+            "log": BuiltinFunction("log", _num, _unwrap(math.log)),
             "π": math.pi,
             "pi": math.pi,
             "E": math.e,
@@ -43,8 +46,8 @@ class Parser:
         self.input = user_input
         self.lex = lex
         self.state = BUILTINS.builtins.copy()
-        self.tokens = None # type: List[Token]
-        self.sequence = None
+        self.tokens: Optional[List[Token]] = None
+        self.sequence: Optional["GeoSequence"] = None
 
     def parse(self, tokens: List[Token]):
         self.tokens = tokens
@@ -106,6 +109,24 @@ class Parser:
 
                 continue
 
+            elif token.type == "(":
+                depth += 1
+                if depth == 1:
+                    last_token = token
+                    bracket = Bracket(token)
+                    continue
+
+            elif token.type == ")":
+                depth -= 1
+                if depth == 0:
+                    last_token = token
+                    exprs[-1].add_chunk(bracket)
+                    bracket = None
+                    continue
+
+                if depth < 0:
+                    raise TokenizedUserInputError(self.input, token, "Unexpected closing bracket")
+
             elif token.type == "FUNCTION":
                 if not allow_functions:
                     raise TokenizedUserInputError(self.input, token, "Functions are not allowed here")
@@ -132,29 +153,21 @@ class Parser:
                 exprs.append(Expression())
                 continue
 
-            elif token.type == "(":
-                depth += 1
-                if depth == 1:
-                    last_token = token
-                    bracket = Bracket(token)
-                    continue
-
-            elif token.type == ")":
-                depth -= 1
-                if depth == 0:
-                    last_token = token
-                    exprs[-1].add_chunk(bracket)
-                    bracket = None
-                    continue
-
-                if depth < 0:
-                    raise TokenizedUserInputError(self.input, token, "Unexpected closing bracket")
-
             elif token.type == "FUNCTION_CALL":
                 toks = FUNCTIONCALL_RE.match(token.value)
                 name, args = toks.groups()
                 args = self.parse_args(token, token.value.find("("), args)
                 f = FunctionCall(token, name, args)
+                last_token = f
+                exprs[-1].add_chunk(f)
+                functioncalls.append(f)
+                continue
+
+            elif token.type in ("SEQUENCE_N_CALL", "SEQUENCE_S_CALL", "SEQUENCE_SN_CALL"):
+                toks = SEQUENCE_X_RE.match(token.value)
+                args = toks.groups()[0]
+                args = self.parse_args(token, token.value.find("("), args)
+                f = FunctionCall(token, "s", args)
                 last_token = f
                 exprs[-1].add_chunk(f)
                 functioncalls.append(f)
@@ -187,15 +200,13 @@ class Parser:
 
                 groups = SEQUENCE_RE.match(token.value)
                 attrs = list(groups.groups())
-                self.sequence = seq = Sequence(token, attrs)
+                self.sequence = seq = GeoSequence(token, attrs)
                 fn = SequenceFunction(seq)
                 self.state['S'] = self.state['s'] = fn
                 continue
 
-            if bracket:
-                bracket.add_chunk(token)
             else:
-                exprs[-1].add_chunk(token)
+                raise ValueError(f"Unexpected token {token!r}")
 
         for call in functioncalls:
             call.validate(self)
@@ -352,7 +363,7 @@ class Operator:
         if right > MAX_ALLOWABLE_NUMBER:
             raise EvaluationError(parser.tokens, self.token, left, right,
                                   "Number (right) is larger than the permissible values")
-        if self.op == "^" and right > 50:
+        if self.op == "^" and right > MAX_EXPONENT:
             raise EvaluationError(parser.tokens, self.token, left, right,
                                   "Number (right) is larger than the permissible values")
         return self.OPS[self.op](left, right)
@@ -390,7 +401,7 @@ class Expression:
 
         self.chunks.append(obj)
 
-    def validate(self, parser: Parser):
+    def validate(self, _: Parser):
         def _t(t0, t1, x):
             if isinstance(t0, Operator) and t0.op == "-" and isinstance(t1, Token) and t1.type == "NUMBER":
                 t1.value *= -1
@@ -458,7 +469,7 @@ class Bracket:
     def __repr__(self):
         return f"<Bracket {self.tokens}>"
 
-class Sequence:
+class GeoSequence:
     __slots__ = "values", "geometric", "t", "d", "token"
     value = None
 
@@ -492,11 +503,50 @@ class Sequence:
         self.d = arg2 / arg1
 
         if arg3 and arg3 / arg2 != self.d:
-            raise TokenizedUserInputError(parser.input, self.token, f"Invalid sequence ({arg2}/{arg1} != {arg3}/{arg2})")
+            raise TokenizedUserInputError(
+                parser.input,
+                self.token,
+                f"Invalid sequence ({arg2}/{arg1} != {arg3}/{arg2})"
+            )
 
-    def execute(self, _: Token, __: Parser, value: Union[int, float]):
-        return self.t*(self.d**(value-1))
+    def execute(self, token: Token, parser: Parser, value: Union[int, float]) -> Union[int, float]:
+        if token.type not in self._EXECUTIONS:
+            raise TokenizedUserInputError(parser.input, token, "Unknown sequence operation")
 
+        return self._EXECUTIONS[token.type](self, token, parser, value) # noqa
+
+    def _execute_n_tn(self, token: Token, parser: Parser, value: Union[int, float]) -> Union[int, float]:
+        if value > MAX_EXPONENT:
+            raise TokenizedUserInputError(
+                parser.input,
+                token,
+                f"Exponents are restricted to {MAX_EXPONENT} (got {value})"
+            )
+
+        return self.t * (self.d ** (value - 1))
+
+    def _execute_tn_n(self, _: Token, __: Parser, value: Union[int, float]) -> Union[int, float]:
+        return (math.log(value / self.t) / math.log(self.d)) + 1
+
+    def _execute_n_sm(self, token: Token, parser: Parser, value: Union[int, float]) -> Union[int, float]:
+        if value > MAX_EXPONENT:
+            raise TokenizedUserInputError(
+                parser.input,
+                token,
+                f"Exponents are restricted to {MAX_EXPONENT} (got {value})"
+            )
+
+        return (self.t * ((self.d ** value) - 1)) / (self.d - 1)
+
+    def _execute_tn_sm(self, _: Token, __: Parser, value: Union[int, float]) -> Union[int, float]:
+        return (self.d*value-self.t)/(self.d-1)
+
+    _EXECUTIONS = {
+        "FUNCTION_CALL": _execute_n_tn,
+        "SEQUENCE_N_CALL": _execute_tn_n,
+        "SEQUENCE_S_CALL": _execute_n_sm,
+        "SEQUENCE_SN_CALL": _execute_tn_sm
+    }
 
 class Function:
     __slots__ = "name", "args", "chunks"
@@ -533,7 +583,7 @@ class Function:
             scope['x'] = x
             try:
                 y = parser.do_math(self.chunks, scope)
-            except (ZeroDivisionError):
+            except ZeroDivisionError:
                 y = None
             plots[x] = y
 
@@ -554,7 +604,7 @@ class PlottableFunction(Function):
 class SequenceFunction(Function):
     __slots__ = "sequence",
 
-    def __init__(self, sequence: Sequence):
+    def __init__(self, sequence: Sequence): # noqa
         self.name = "S"
         self.args = ["value"]
         self.chunks = None

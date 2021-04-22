@@ -12,7 +12,18 @@ Token.__eq__ = __token_eq
 
 # NoInspection PyUnresolvedReference
 class MathLexer(Lexer):
-    tokens = { FUNCTION, PLOT_FUNCTION, SEQUENCE, FUNCTION_CALL, NAME, NUMBER, NEWLINE }
+    tokens = {
+        FUNCTION,
+        PLOT_FUNCTION,
+        SEQUENCE,
+        FUNCTION_CALL,
+        SEQUENCE_N_CALL,
+        SEQUENCE_S_CALL,
+        SEQUENCE_SN_CALL,
+        NAME,
+        NUMBER,
+        NEWLINE
+    }
     ignore = " \t"
     literals = { "=", "(", ")" }
 
@@ -20,7 +31,10 @@ class MathLexer(Lexer):
     FUNCTION = r"([a-zA-Z]+)\(([a-zA-Z,\s]*)\)\s*=\s*(.*)"
     PLOT_FUNCTION = r"y\s*=\s*(.*)"
     SEQUENCE = r"[sS]\s*=\s*([^,\n]*),([^,\n]*),?([^,\n]*)?"
-    FUNCTION_CALL = r"([a-zA-Z]+)\((.*)\)"
+    FUNCTION_CALL = r"([a-zA-Z]+)\s*\((.*)\)"
+    SEQUENCE_N_CALL = r"[sS]\s*\?\s*\((.*)\)"
+    SEQUENCE_S_CALL = r"[sS]\s*\!\s*\((.*)\)"
+    SEQUENCE_SN_CALL = r"[sS]\s*\!\!\s*\((.*)\)"
     NAME = r"[a-zA-Z_][a-zA-Z0-9_]*"
 
     @_(r"[+\-*/^]")
