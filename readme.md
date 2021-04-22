@@ -17,7 +17,7 @@ import mathparser
 exp = input("enter your equation: ")
 
 lex = mathparser.MathLexer()
-parser = mathparser.Parser(expr, lex)
+parser = mathparser.Parser(exp, lex)
 
 async def main():
     try:
