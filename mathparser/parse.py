@@ -342,6 +342,7 @@ class Parser:
 class Operator:
     __slots__ = "op", "token"
     value = None
+    type = None
     OPS = {
         "+": lambda l, r: l + r,
         "-": lambda l, r: l - r,
@@ -371,6 +372,7 @@ class Operator:
 class Expression:
     __slots__ = "chunks",
     value = None
+    type = None
     plot = False
 
     def __init__(self):
@@ -429,6 +431,8 @@ class Expression:
 class Bracket:
     __slots__ = "tokens", "start"
     value = None
+    type = None
+
     def __init__(self, start: Token):
         self.tokens = []
         self.start = start
@@ -604,7 +608,7 @@ class PlottableFunction(Function):
 class SequenceFunction(Function):
     __slots__ = "sequence",
 
-    def __init__(self, sequence: Sequence): # noqa
+    def __init__(self, sequence: GeoSequence): # noqa
         self.name = "S"
         self.args = ["value"]
         self.chunks = None
@@ -641,6 +645,7 @@ class BuiltinFunction(Function):
 class FunctionCall:
     __slots__ = "_start", "name", "args"
     value = None
+    type = None
 
     def __init__(self, t: Token, name: str, tokens: List[Union[Expression, "FunctionCall", Token]]):
         self._start = t
